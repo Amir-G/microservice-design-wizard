@@ -4387,48 +4387,98 @@ if (existing.length){
     const pub = Array.isArray(b.published)? b.published : [];
     const con = Array.isArray(b.consumed)?  b.consumed  : [];
     const pubRows = pub.map(x=>{
-      if((x.kind||'').toLowerCase()==='rabbitmq'){
-        return row('RabbitMQ', esc(x.event||''), esc(x.exchange||''), esc(x.routingKey||''),
+      const kind = (x.platform||x.kind||'').toLowerCase();
+      if(kind==='rabbitmq'){
+        return row('RabbitMQ', esc(x.event||x.name||''), esc(x.exchange||''), esc(x.routingKey||''),
                    esc(x.schemaVersion||''), esc(x.useCase||''), esc(x.delivery||''), esc(x.ordering||''));
       } else {
-        return row('Kafka', esc(x.topic||''), esc(x.partitionKey||''), esc(x.partitions||''),
-                   esc(x.replication||''), esc(x.schemaVersion||''), esc(x.useCase||''), esc(x.delivery||''), esc(x.ordering||''));
+        return row('Kafka', esc(x.topic||x.name||''), esc(x.partitionKey||''), esc(x.partitions||''),
+                   esc(x.replication||x.replicationFactor||''), esc(x.schemaVersion||''), esc(x.useCase||''), esc(x.delivery||''), esc(x.ordering||''));
       }
     });
     const conRows = con.map(x=>{
-      return row(esc(x.kind||''), esc(x.source||''), esc(x.group||''), esc(x.offset||''), esc(x.delivery||''), esc(x.notes||''));
+      const kind = (x.platform||x.kind||'').toLowerCase();
+      const source = x.topic||x.queue||x.source||x.name||'';
+      const group = x.groupId||x.group||'';
+      return row(esc(x.platform||x.kind||''), esc(source), esc(group), esc(x.offset||x.reset||''), esc(x.delivery||''), esc(x.notes||''));
     });
     const pubHead = head('Kind','Name/Topic','Exchange/Key/PK','Routing/Partitions','Replicas/—','Schema','Use Case','Delivery','Ordering');
     const conHead = head('Kind','Source','Group','Offset','Delivery','Notes');
+    const rationale = Array.isArray(b.rationale)? b.rationale.join(', ') : (b.rationale||'');
+    // Detailed per-event lists to include ALL fields
+    const detailSafe = v => (String(v??'').trim()? esc(v): TRED);
+    const pubDetails = pub.map((e, i)=>{
+      return `
+        <h4>Published Event ${i+1}</h4>
+        <ul>
+          <li><b>Platform</b>: ${detailSafe(e.platform||e.kind)}</li>
+          <li><b>Name/Topic</b>: ${detailSafe(e.event||e.topic||e.name)}</li>
+          <li><b>Exchange</b>: ${detailSafe(e.exchange)}</li>
+          <li><b>Routing Key</b>: ${detailSafe(e.routingKey)}</li>
+          <li><b>Partition Key</b>: ${detailSafe(e.partitionKey)}</li>
+          <li><b>Partitions</b>: ${detailSafe(e.partitions)}</li>
+          <li><b>Replication Factor</b>: ${detailSafe(e.replication||e.replicationFactor)}</li>
+          <li><b>Schema Version</b>: ${detailSafe(e.schemaVersion)}</li>
+          <li><b>Use Case</b>: ${detailSafe(e.useCase)}</li>
+          <li><b>Delivery Guarantee</b>: ${detailSafe(e.delivery)}</li>
+          <li><b>Ordering Guarantee</b>: ${detailSafe(e.ordering)}</li>
+          <li><b>Description</b>: ${detailSafe(e.description)}</li>
+        </ul>`;
+    }).join('');
+    const conDetails = con.map((e, i)=>{
+      return `
+        <h4>Consumed Event ${i+1}</h4>
+        <ul>
+          <li><b>Platform</b>: ${detailSafe(e.platform||e.kind)}</li>
+          <li><b>Source/Topic</b>: ${detailSafe(e.topic||e.queue||e.source||e.name)}</li>
+          <li><b>Consumer Group/Queue</b>: ${detailSafe(e.groupId||e.group)}</li>
+          <li><b>Offset/Reset</b>: ${detailSafe(e.offset||e.reset)}</li>
+          <li><b>Delivery Guarantee</b>: ${detailSafe(e.delivery)}</li>
+          <li><b>Binding/Partition Key</b>: ${detailSafe(e.bindingKey||e.partitionKey)}</li>
+          <li><b>Source System</b>: ${detailSafe(e.sourceSystem)}</li>
+          <li><b>Notes</b>: ${detailSafe(e.notes)}</li>
+        </ul>`;
+    }).join('');
     return `
       <h3>Rationale</h3>
-      <p><b>Internal (K8s):</b> RabbitMQ — lightweight/low latency.<br/>
-         <b>External:</b> Kafka — durable, replay.</p>
-      <h3>Published Events</h3>${tbl(pubHead, pubRows)}
-      <h3>Consumed Events</h3>${tbl(conHead, conRows)}
+      <p>${rationale || '<b>Internal (K8s):</b> RabbitMQ — lightweight/low latency.<br/><b>External:</b> Kafka — durable, replay.'}</p>
+      <h3>Published Events</h3>${pubRows.length ? tbl(pubHead, pubRows) : '<p>No published events.</p>'}
+      ${pubDetails}
+      <h3>Consumed Events</h3>${conRows.length ? tbl(conHead, conRows) : '<p>No consumed events.</p>'}
+      ${conDetails}
     `;
   }
 
   function renderData(d){
     if(!d) return '';
+    const dbType = d.dbEngine || d.dbType || '';
+    const rationale = d.dbRationale || d.rationale || '';
+    const schema = d.schemaInline || d.schema || '';
     const pii = Array.isArray(d.piiTable)? d.piiTable : [];
-    const idx = Array.isArray(d.indexing)? d.indexing : [];
+    const idx = Array.isArray(d.struct?.indexes)? d.struct.indexes : [];
+    const idxRows = idx.map(x=>row(esc(x.table||''), esc(x.columns||''), esc(x.type||''), esc(x.unique||'')));
+    const retRows = Array.isArray(d.retention)? d.retention.map(r=>row(esc(r.name||''), esc(r.period||''), esc(r.strategy||''), esc(r.legal||''), esc(r.notes||''))) : [];
     const piiRows = pii.map(x=>row(esc(x.field||''), esc(x.access||''), esc(x.restriction||'')));
-    const idxRows = idx.map(x=>row(esc(x.strategy||''), esc(x.detail||''), esc(x.rationale||'')));
     return `
-      ${tbl(head('DB Type','Rationale','Schema/Document Model'), [row(hv(d.dbType), hv(d.rationale), hv(d.schema))])}
-      <h3>PII / Sensitive Data Handling</h3>${tbl(head('What PII','Who can access','How restricted'), piiRows)}
-      <h3>Backup & Recovery</h3><p>${hv(d.backupRecovery)}</p>
-      <h3>Indexing / Partitioning / Sharding</h3>${tbl(head('Strategy','Details','Rationale'), idxRows)}
-      <h3>Retention</h3><p>${hv(d.retention)}</p>
+      ${tbl(head('DB Type','Rationale','Schema/Document Model'), [row(hv(dbType), hv(rationale), hv(schema))])}
+      ${piiRows.length ? `<h3>PII / Sensitive Data Handling</h3>${tbl(head('What PII','Who can access','How restricted'), piiRows)}` : ''}
+      ${retRows.length ? `<h3>Retention</h3>${tbl(head('Name','Period','Strategy','Legal','Notes'), retRows)}` : ''}
+      ${idxRows.length ? `<h3>Indexing</h3>${tbl(head('Table','Columns','Type','Unique'), idxRows)}` : ''}
     `;
   }
 
   function renderCache(c){
     if(!c) return '';
-    const layers = Array.isArray(c.layers)? c.layers : [];
-    const rows = layers.map(x=>row(esc(x.type||''), esc(x.topology||''), esc(x.ttl||''), esc(x.maxSize||''), esc(x.eviction||''), esc(x.keys||''), esc(x.consistency||'')));
-    return tbl(head('Type','Topology','TTL','Max size','Eviction','Key pattern','Consistency'), rows);
+    // Support both old structure (layers array) and new structure (flat fields)
+    if(Array.isArray(c.layers) && c.layers.length){
+      const rows = c.layers.map(x=>row(esc(x.type||''), esc(x.topology||''), esc(x.ttl||''), esc(x.maxSize||''), esc(x.eviction||''), esc(x.keys||''), esc(x.consistency||'')));
+      return tbl(head('Type','Topology','TTL','Max size','Eviction','Key pattern','Consistency'), rows);
+    } else {
+      // New structure with flat fields
+      return tbl(head('Engine','Usage','Topology','Size','TTL','Eviction','Key Pattern'), [
+        row(hv(c.engine), hv(c.usage), hv(c.topology), hv(c.size), hv(c.ttl), hv(c.evict), hv(c.keyns))
+      ]);
+    }
   }
 
   function renderSecurity(s){
@@ -4544,164 +4594,382 @@ if (existing.length){
 
   // MAIN export
   window.exportWholeDoc = function(){
-    const s = window.state || {};
-    let html = `<!DOCTYPE html><html><head><meta charset="utf-8">
-      <title>Microservice Detailed Design</title>
-      <style>
-        body{font-family:Segoe UI,Arial,sans-serif; font-size:12pt}
-        h1{font-size:20pt;margin:0 0 10px}
-        h2{font-size:14pt;margin:14px 0 6px}
-        h3{font-size:12pt;margin:10px 0 6px}
-        .sec{margin:12px 0}
-        table{border-collapse:collapse;width:100%;margin:6px 0}
-        th,td{border:1px solid #ccc;padding:6px;vertical-align:top}
-        th{background:#f3f4f6}
-        .meta td{border:none;padding:2px 6px}
-        a{color:#0066cc;text-decoration:underline}
-        a:visited{color:#0066cc}
-        .tbd{color:#c00}
-      </style>
-    </head><body>
-      <h1>Microservice Detailed Design</h1>
-    `;
+    try{
+      // Serialize current step before exporting
+      try{
+        if(steps[active]?.serialize && id('stepMount')?.childElementCount){
+          const key=steps[active].id;
+          const tgt = state[key] = state[key] || {};
+          steps[active].serialize(tgt, id('stepMount'));
+        }
+      }catch(_){/* ignore */}
+      
+      // Validate service name
+      const serviceName = (state.service_overview?.svcName || '').trim();
+      if(!serviceName){
+        toast('Export requires at least a service name');
+        go(0);
+        return;
+      }
+      
+      const s = state;
+      let html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+        <title>Microservice Detailed Design</title>
+        <style>
+          /* Word-compatible landscape layout */
+          @page Section1 { size: 841.9pt 595.3pt; margin: 36pt; }
+          div.Section1 { page: Section1; }
+          /* Fallback for other consumers */
+          @page { size: landscape; }
+          body{font-family:Segoe UI,Arial,sans-serif; font-size:12pt}
+          h1{font-size:20pt;margin:0 0 10px}
+          h2{font-size:14pt;margin:14px 0 6px}
+          h3{font-size:12pt;margin:10px 0 6px}
+          .sec{margin:12px 0}
+          table{border-collapse:collapse;width:100%;margin:6px 0}
+          th,td{border:1px solid #ccc;padding:6px;vertical-align:top}
+          th{background:#f3f4f6}
+          .meta td{border:none;padding:2px 6px}
+          a{color:#0066cc;text-decoration:underline}
+          a:visited{color:#0066cc}
+          .tbd{color:#c00}
+        </style>
+      </head><body>
+        <div class="Section1">
+        <h1>Microservice Detailed Design</h1>
+      `;
 
-    // 1 Service Overview
-const so = s.service_overview || {};
-const soRows = [
-  row('<b>Service name</b>', hv(so.name)),
-  row('<b>Owner</b>', hv(so.owner)),
-  row('<b>Date</b>', hv(so.date)),
-  row('<b>Status</b>', hv(so.status)),
-  row('<b>Business context</b>', hv(so.businessContext)),
-  row('<b>Service purpose</b>', hv(so.servicePurpose)),
-  row('<b>Downstream dependencies</b>', (String((so.downstream||[]).join(', ')).trim()?esc((so.downstream||[]).join(', ')):TRED)),
-  row('<b>Upstream consumers</b>',  (String((so.upstream||[]).join(', ')).trim()?esc((so.upstream||[]).join(', ')):TRED))
-];
-html += sec('1. Service Overview', tbl('', soRows));
+      // 1 Service Overview
+      const so = s.service_overview || {};
+      const respRows = Array.isArray(so.responsibilities) ? so.responsibilities.map(r=>row(esc(r.name||''), esc(r.notes||''))) : [];
+      const ngoalRows = Array.isArray(so.nonGoals) ? so.nonGoals.map(n=>row(esc(n.text||''))) : [];
+      const ucRows = Array.isArray(so.useCases) ? so.useCases.map(u=>row(esc(u.name||''), esc(u.actor||''), esc(u.outcome||''))) : [];
+      const soRows = [
+        row('<b>Service name</b>', hv(so.svcName)),
+        row('<b>Service key</b>', hv(so.svcKey)),
+        row('<b>Version</b>', hv(so.svcVer)),
+        row('<b>Status</b>', hv(so.svcStatus)),
+        row('<b>Date</b>', hv(so.svcDate)),
+        row('<b>Domain / Area</b>', hv(so.svcDomain)),
+        row('<b>Service owner</b>', hv(so.svcOwner)),
+        row('<b>Technical lead</b>', hv(so.svcTL)),
+        row('<b>Business context</b>', hv(so.businessContext)),
+        row('<b>Service purpose</b>', hv(so.servicePurpose)),
+        row('<b>External boundaries</b>', hv(so.externalBoundaries))
+      ];
+      html += sec('1. Service Overview', tbl('', soRows));
+      if(respRows.length) html += sec('1.1 Primary Responsibilities', tbl(head('Responsibility','Notes'), respRows));
+      if(ngoalRows.length) html += sec('1.2 Non-goals', tbl(head('Non-goal'), ngoalRows));
+      if(ucRows.length) html += sec('1.3 Use Cases', tbl(head('Use case name','Primary actor','Outcome / value'), ucRows));
 
-    // 2 API
-    html += sec('2. API Specifications (REST)', renderApi(s.api_specs));
+      // 2 API
+      html += sec('2. API Specifications (REST)', renderApi(s.api_specs || {}));
 
-    // 3 Message Broker
-    html += sec('4. Message Broker Integration', renderBroker(s.msg_broker));
+      // 3 Message Broker
+      html += sec('3. Message Broker Integration', renderBroker(s.msg_broker || {}));
 
-    // 4 Data Storage
-    html += sec('5. Data Storage', renderData(s.data_storage));
+      // 4 Data Storage
+      html += sec('4. Data Storage', renderData(s.data_storage || {}));
 
-    // 5 Caching Layer
-    html += sec('5. Caching Layer', renderCache(s.cache_layer));
+      // 5 Caching Layer
+      html += sec('5. Caching Layer', renderCache(s.cache_layer || {}));
 
-    // 6 Security
-    html += sec('6/7. Security', renderSecurity(s.security));
+      // 6 Security
+      html += sec('6. Security', renderSecurity(s.security || {}));
 
-    // 7 Observability
-    html += sec('6. Observability', renderObservability(s.observability));
+      // 7 Observability
+      html += sec('7. Observability', renderObservability(s.observability || {}));
 
-    // 8 Performance & Scalability
-    html += sec('7. Performance & Scalability', renderPerf(s.perf_scalability));
+      // 8 Performance & Scalability
+      html += sec('8. Performance & Scalability', renderPerf(s.perf_scalability || {}));
 
-    // 9 Testing Strategy
-    html += sec('9. Testing Strategy', renderTesting(s.testing_strategy));
+      // 9 Testing Strategy
+      html += sec('9. Testing Strategy', renderTesting(s.testing_strategy || {}));
 
-    // 10 Deployment
-    html += sec('10. Deployment', renderDeployment(s.deployment));
+      // 10 Deployment
+      html += sec('10. Deployment', renderDeployment(s.deployment || {}));
 
-    // 11 Compliance & Governance
-    html += sec('11. Compliance & Governance', renderCompliance(s.compliance_governance));
+      // 11 Compliance & Governance
+      html += sec('11. Compliance & Governance', renderCompliance(s.compliance_governance || {}));
 
-    // 12 Final Chapter
-    html += sec('12. Decisions, Open Questions & Review', renderFinal(s.final_chapter));
+      // 12 Final Chapter
+      html += sec('12. Decisions, Open Questions & Review', renderFinal(s.final_chapter || {}));
 
-    html += `</body></html>`;
+      html += `</div></body></html>`;
 
-    const blob = new Blob([html], { type: 'application/msword' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'microservice_detailed_design.doc';
-    a.click();
+      // Generate filename
+      const version = (so.svcVer || 'v1.0.0').trim();
+      const sanitizedName = serviceName.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'microservice';
+      const versionStr = version.startsWith('v') ? version : `v${version}`;
+      const filename = `microservice_design_Template v2.0 - ${sanitizedName}-${versionStr}.doc`;
+
+      const blob = new Blob([html], { type: 'application/msword' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(()=>{URL.revokeObjectURL(a.href); a.remove();},0);
+      toast('Exported Word document');
+    }catch(e){ console.error(e); toast('Export failed'); }
+  };
+  
+  // Load html-docx-js on demand
+  function ensureHtmlDocxLoaded(cb){
+    if(window.htmlDocx){ cb(); return; }
+    const s = document.createElement('script');
+    s.src = 'https://unpkg.com/html-docx-js/dist/html-docx.js';
+    s.onload = ()=>cb();
+    s.onerror = ()=>{ toast('Failed to load DOCX generator'); };
+    document.head.appendChild(s);
+  }
+
+  // True .docx export using html-docx-js (packaged DOCX)
+  window.exportTrueDocx = function(){
+    ensureHtmlDocxLoaded(()=>{
+      try{
+        // Serialize current step before exporting
+        try{
+          if(steps[active]?.serialize && id('stepMount')?.childElementCount){
+            const key=steps[active].id;
+            const tgt = state[key] = state[key] || {};
+            steps[active].serialize(tgt, id('stepMount'));
+          }
+        }catch(_){/* ignore */}
+
+        const serviceName = (state.service_overview?.svcName || '').trim();
+        if(!serviceName){ toast('Export requires at least a service name'); go(0); return; }
+        const so = state.service_overview || {};
+
+        // Reuse same HTML body as Word export (landscape + Section1)
+        let html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+          <title>Microservice Detailed Design</title>
+          <style>
+            @page Section1 { size: 841.9pt 595.3pt; margin: 36pt; }
+            div.Section1 { page: Section1; }
+            @page { size: landscape; }
+            body{font-family:Segoe UI,Arial,sans-serif; font-size:12pt}
+            h1{font-size:20pt;margin:0 0 10px}
+            h2{font-size:14pt;margin:14px 0 6px}
+            h3{font-size:12pt;margin:10px 0 6px}
+            .sec{margin:12px 0}
+            table{border-collapse:collapse;width:100%;margin:6px 0}
+            th,td{border:1px solid #ccc;padding:6px;vertical-align:top}
+            th{background:#f3f4f6}
+            .meta td{border:none;padding:2px 6px}
+            a{color:#0066cc;text-decoration:underline}
+            a:visited{color:#0066cc}
+            .tbd{color:#c00}
+          </style>
+        </head><body><div class="Section1"><h1>Microservice Detailed Design</h1>`;
+
+        // Build sections using existing helpers
+        const secA = (anchor, title, body) => `\n<a name=\"${anchor}\"></a>${sec(title, body)}`;
+        const s = state;
+        const soData = s.service_overview || {};
+        const respRows = Array.isArray(soData.responsibilities) ? soData.responsibilities.map(r=>row(esc(r.name||''), esc(r.notes||''))) : [];
+        const ngoalRows = Array.isArray(soData.nonGoals) ? soData.nonGoals.map(n=>row(esc(n.text||''))) : [];
+        const ucRows = Array.isArray(soData.useCases) ? soData.useCases.map(u=>row(esc(u.name||''), esc(u.actor||''), esc(u.outcome||''))) : [];
+        const soRows = [
+          row('<b>Service name</b>', hv(soData.svcName)),
+          row('<b>Service key</b>', hv(soData.svcKey)),
+          row('<b>Version</b>', hv(soData.svcVer)),
+          row('<b>Status</b>', hv(soData.svcStatus)),
+          row('<b>Date</b>', hv(soData.svcDate)),
+          row('<b>Domain / Area</b>', hv(soData.svcDomain)),
+          row('<b>Service owner</b>', hv(soData.svcOwner)),
+          row('<b>Technical lead</b>', hv(soData.svcTL)),
+          row('<b>Business context</b>', hv(soData.businessContext)),
+          row('<b>Service purpose</b>', hv(soData.servicePurpose)),
+          row('<b>External boundaries</b>', hv(soData.externalBoundaries))
+        ];
+        // Table of Contents
+        html += `\n<div class=\"sec\"><h2>Table of Contents</h2>\n<ul>\n  <li><a href=\"#svc-overview\">1. Service Overview</a></li>\n  <li><a href=\"#api\">2. API Specifications (REST)</a></li>\n  <li><a href=\"#broker\">3. Message Broker Integration</a></li>\n  <li><a href=\"#data\">4. Data Storage</a></li>\n  <li><a href=\"#cache\">5. Caching Layer</a></li>\n  <li><a href=\"#security\">6. Security</a></li>\n  <li><a href=\"#observability\">7. Observability</a></li>\n  <li><a href=\"#perf\">8. Performance & Scalability</a></li>\n  <li><a href=\"#testing\">9. Testing Strategy</a></li>\n  <li><a href=\"#deploy\">10. Deployment</a></li>\n  <li><a href=\"#compliance\">11. Compliance & Governance</a></li>\n  <li><a href=\"#final\">12. Decisions, Open Questions & Review</a></li>\n</ul>\n</div>`;
+
+        html += secA('svc-overview', '1. Service Overview', tbl('', soRows));
+        if(respRows.length) html += sec('1.1 Primary Responsibilities', tbl(head('Responsibility','Notes'), respRows));
+        if(ngoalRows.length) html += sec('1.2 Non-goals', tbl(head('Non-goal'), ngoalRows));
+        if(ucRows.length) html += sec('1.3 Use Cases', tbl(head('Use case name','Primary actor','Outcome / value'), ucRows));
+
+        html += secA('api', '2. API Specifications (REST)', renderApi(s.api_specs || {}));
+        html += secA('broker', '3. Message Broker Integration', renderBroker(s.msg_broker || {}));
+        html += secA('data', '4. Data Storage', renderData(s.data_storage || {}));
+        html += secA('cache', '5. Caching Layer', renderCache(s.cache_layer || {}));
+        html += secA('security', '6. Security', renderSecurity(s.security || {}));
+        html += secA('observability', '7. Observability', renderObservability(s.observability || {}));
+        html += secA('perf', '8. Performance & Scalability', renderPerf(s.perf_scalability || {}));
+        html += secA('testing', '9. Testing Strategy', renderTesting(s.testing_strategy || {}));
+        html += secA('deploy', '10. Deployment', renderDeployment(s.deployment || {}));
+        html += secA('compliance', '11. Compliance & Governance', renderCompliance(s.compliance_governance || {}));
+        html += secA('final', '12. Decisions, Open Questions & Review', renderFinal(s.final_chapter || {}));
+        html += `</div></body></html>`;
+
+        const version = (so.svcVer || 'v1.0.0').trim();
+        const sanitizedName = serviceName.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'microservice';
+        const versionStr = version.startsWith('v') ? version : `v${version}`;
+        const filename = `${sanitizedName}-DetailedDesign-${versionStr}.docx`;
+
+        const blob = window.htmlDocx.asBlob(html, { orientation: 'landscape' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(()=>{URL.revokeObjectURL(a.href); a.remove();},0);
+        toast('Exported DOCX');
+      }catch(e){ console.error(e); toast('DOCX export failed'); }
+    });
   };
   
   // Markdown export (with red TBD via inline HTML span)
   window.exportWholeMarkdown = function(){
-    const s = window.state || {};
-    const TRED_MD = '<span style="color:red">TBD</span>';
-    const mv = v=>{ const t=String(v??'').trim(); return t?String(v):TRED_MD; };
-    const mdRow = arr=>`| ${arr.map(c=>c||TRED_MD).join(' | ')} |`;
-    const mdTable = (headers, rows)=>{
-      const head = `| ${headers.join(' | ')} |`;
-      const sep = `| ${headers.map(()=> '---').join(' | ')} |`;
-      const body = rows.length? rows.join('\n') : mdRow(headers.map(()=>TRED_MD));
-      return `${head}\n${sep}\n${body}`;
-    };
-    let md = `# Microservice Detailed Design\n`;
-    // 1 Service Overview
-    const so = s.service_overview || {};
-    md += `\n## 1. Service Overview\n`;
-    md += mdTable(['Field','Value'], [
-      mdRow(['Service name', mv(so.name)]),
-      mdRow(['Owner', mv(so.owner)]),
-      mdRow(['Date', mv(so.date)]),
-      mdRow(['Status', mv(so.status)]),
-      mdRow(['Business context', mv(so.businessContext)]),
-      mdRow(['Service purpose', mv(so.servicePurpose)])
-    ]);
-    // 2 API
-    const api = s.api_specs || {};
-    md += `\n\n## 2. API Specifications (REST)\n`;
-    const eps = Array.isArray(api.endpoints)? api.endpoints : [];
-    md += mdTable(['Method','Path','Idempotent'], eps.length? eps.map(e=>mdRow([mv(e.method), mv(e.path), mv(e.idempotent)])) : []);
-    // 3 Message Broker
-    const mb = s.msg_broker || {};
-    md += `\n\n## 3. Message Broker Integration\n`;
-    const pubs = Array.isArray(mb.published)? mb.published : [];
-    md += `\n### Published Events\n`;
-    md += mdTable(['Platform','Name/Topic','Routing/PK'], pubs.length? pubs.map(x=> mdRow([mv(x.platform), mv(x.event||x.topic), mv(x.routingKey||x.partitionKey)])) : []);
-    const cons = Array.isArray(mb.consumed)? mb.consumed : [];
-    md += `\n\n### Consumed Events\n`;
-    md += mdTable(['Platform','Source/Topic','Group/Queue'], cons.length? cons.map(x=> mdRow([mv(x.platform), mv(x.topic||x.queue||x.source), mv(x.groupId||'')])) : []);
-    // 4 Data Storage
-    const ds = s.data_storage || {};
-    md += `\n\n## 4. Data Storage\n`;
-    md += mdTable(['DB Type','Rationale'], [ mdRow([mv(ds.dbEngine||ds.dbType), mv(ds.dbRationale||ds.rationale)]) ]);
-    // 5 Security
-    const sec = s.security || {};
-    md += `\n\n## 5. Security\n`;
-    md += mdTable(['Auth Method','Token Validation'], [ mdRow([mv(sec.authMethod), mv(sec.authValidate)]) ]);
-    // 6 Observability
-    const ob = s.observability || {};
-    md += `\n\n## 6. Observability\n`;
-    md += mdTable(['Prod','Staging','Dev'], [ mdRow([mv(ob.logProd), mv(ob.logStg), mv(ob.logDev)]) ]);
-    // 7 Performance & Scalability
-    const ps = s.perf_scalability || {};
-    md += `\n\n## 7. Performance & Scalability\n`;
-    md += mdTable(['Env','RPS','p95','p99','Error%','SLO'], [
-      mdRow(['Production', mv(ps.env?.prod?.rps), mv(ps.env?.prod?.p95), mv(ps.env?.prod?.p99), mv(ps.env?.prod?.err), mv(ps.env?.prod?.slo)]),
-      mdRow(['Staging', mv(ps.env?.stg?.rps), mv(ps.env?.stg?.p95), mv(ps.env?.stg?.p99), mv(ps.env?.stg?.err), mv(ps.env?.stg?.slo)]),
-      mdRow(['Development', mv(ps.env?.dev?.rps), mv(ps.env?.dev?.p95), mv(ps.env?.dev?.p99), mv(ps.env?.dev?.err), mv(ps.env?.dev?.slo)])
-    ]);
-    // 10 Deployment
-    const dp = s.deployment || {};
-    md += `\n\n## 10. Deployment\n`;
-    md += mdTable(['Image','Type','Strategy'], [ mdRow([mv(dp.image), mv(dp.kind), mv(dp.rollout)]) ]);
-    // 11 Compliance
-    const cg = s.compliance_governance || {};
-    md += `\n\n## 11. Compliance & Governance\n`;
-    md += mdTable(['Frameworks','Classification'], [ mdRow([mv((cg.regs||[]).join(', ')), mv(cg.class)]) ]);
-    // 12 Final
-    const fc = s.final_chapter || {};
-    md += `\n\n## 12. Decisions, Open Questions & Review\n`;
-    const decs = Array.isArray(fc.decisions)? fc.decisions : [];
-    md += `\n### Decisions\n` + mdTable(['Decision','Rationale','Date','By'], decs.length? decs.map(x=>mdRow([mv(x.desc), mv(x.rat), mv(x.date), mv(x.by)])) : []);
-    const ques = Array.isArray(fc.questions)? fc.questions : [];
-    md += `\n\n### Open Questions\n` + mdTable(['Question','To','Due','Pri','Status','Notes'], ques.length? ques.map(x=>mdRow([mv(x.q), mv(x.to), mv(x.date), mv(x.pri), mv(x.status), mv(x.notes)])) : []);
-    const appr = Array.isArray(fc.approvals)? fc.approvals : [];
-    md += `\n\n### Approvals\n` + mdTable(['Role','Name','Decision','Date','Comments'], appr.length? appr.map(x=>mdRow([mv(x.role), mv(x.name), mv(x.decision), mv(x.date), mv(x.comments)])) : []);
+    try{
+      // Serialize current step before exporting
+      try{
+        if(steps[active]?.serialize && id('stepMount')?.childElementCount){
+          const key=steps[active].id;
+          const tgt = state[key] = state[key] || {};
+          steps[active].serialize(tgt, id('stepMount'));
+        }
+      }catch(_){/* ignore */}
+      
+      // Validate service name
+      const serviceName = (state.service_overview?.svcName || '').trim();
+      if(!serviceName){
+        toast('Export requires at least a service name');
+        go(0);
+        return;
+      }
+      
+      const s = state;
+      const TRED_MD = '<span style="color:red">TBD</span>';
+      const mv = v=>{ const t=String(v??'').trim(); return t?String(v):TRED_MD; };
+      const mdRow = arr=>`| ${arr.map(c=>c||TRED_MD).join(' | ')} |`;
+      const mdTable = (headers, rows)=>{
+        const head = `| ${headers.join(' | ')} |`;
+        const sep = `| ${headers.map(()=> '---').join(' | ')} |`;
+        const body = rows.length? rows.join('\n') : mdRow(headers.map(()=>TRED_MD));
+        return `${head}\n${sep}\n${body}`;
+      };
+      let md = `# Microservice Detailed Design\n\n`;
+      
+      // 1 Service Overview
+      const so = s.service_overview || {};
+      md += `## 1. Service Overview\n\n`;
+      md += mdTable(['Field','Value'], [
+        mdRow(['Service name', mv(so.svcName)]),
+        mdRow(['Service key', mv(so.svcKey)]),
+        mdRow(['Version', mv(so.svcVer)]),
+        mdRow(['Status', mv(so.svcStatus)]),
+        mdRow(['Date', mv(so.svcDate)]),
+        mdRow(['Domain / Area', mv(so.svcDomain)]),
+        mdRow(['Service owner', mv(so.svcOwner)]),
+        mdRow(['Technical lead', mv(so.svcTL)]),
+        mdRow(['Business context', mv(so.businessContext)]),
+        mdRow(['Service purpose', mv(so.servicePurpose)]),
+        mdRow(['External boundaries', mv(so.externalBoundaries)])
+      ]);
+      
+      if(Array.isArray(so.responsibilities) && so.responsibilities.length){
+        md += `\n\n### 1.1 Primary Responsibilities\n\n`;
+        md += mdTable(['Responsibility','Notes'], so.responsibilities.map(r=>mdRow([mv(r.name), mv(r.notes)])));
+      }
+      
+      if(Array.isArray(so.nonGoals) && so.nonGoals.length){
+        md += `\n\n### 1.2 Non-goals\n\n`;
+        md += mdTable(['Non-goal'], so.nonGoals.map(n=>mdRow([mv(n.text)])));
+      }
+      
+      if(Array.isArray(so.useCases) && so.useCases.length){
+        md += `\n\n### 1.3 Use Cases\n\n`;
+        md += mdTable(['Use case name','Primary actor','Outcome / value'], so.useCases.map(u=>mdRow([mv(u.name), mv(u.actor), mv(u.outcome)])));
+      }
+      
+      // 2 API
+      const api = s.api_specs || {};
+      md += `\n\n## 2. API Specifications (REST)\n\n`;
+      const eps = Array.isArray(api.endpoints)? api.endpoints : [];
+      md += mdTable(['Method','Path','Idempotent'], eps.length? eps.map(e=>mdRow([mv(e.method), mv(e.path), mv(e.idempotent)])) : []);
+      
+      // 3 Message Broker
+      const mb = s.msg_broker || {};
+      md += `\n\n## 3. Message Broker Integration\n\n`;
+      const pubs = Array.isArray(mb.published)? mb.published : [];
+      md += `### Published Events\n\n`;
+      md += mdTable(['Platform','Name/Topic','Routing/PK'], pubs.length? pubs.map(x=> mdRow([mv(x.platform||x.kind), mv(x.event||x.topic||x.name), mv(x.routingKey||x.partitionKey)])) : []);
+      const cons = Array.isArray(mb.consumed)? mb.consumed : [];
+      md += `\n\n### Consumed Events\n\n`;
+      md += mdTable(['Platform','Source/Topic','Group/Queue'], cons.length? cons.map(x=> mdRow([mv(x.platform||x.kind), mv(x.topic||x.queue||x.source||x.name), mv(x.groupId||x.group||'')])) : []);
+      
+      // 4 Data Storage
+      const ds = s.data_storage || {};
+      md += `\n\n## 4. Data Storage\n\n`;
+      md += mdTable(['DB Type','Rationale'], [ mdRow([mv(ds.dbEngine||ds.dbType), mv(ds.dbRationale||ds.rationale)]) ]);
+      
+      // 5 Caching Layer
+      const cache = s.cache_layer || {};
+      md += `\n\n## 5. Caching Layer\n\n`;
+      md += mdTable(['Engine','Usage','Topology'], [ mdRow([mv(cache.engine), mv(cache.usage), mv(cache.topology)]) ]);
+      
+      // 6 Security
+      const sec = s.security || {};
+      md += `\n\n## 6. Security\n\n`;
+      md += mdTable(['Auth Method','Token Validation'], [ mdRow([mv(sec.authMethod), mv(sec.authValidate)]) ]);
+      
+      // 7 Observability
+      const ob = s.observability || {};
+      md += `\n\n## 7. Observability\n\n`;
+      md += mdTable(['Prod','Staging','Dev'], [ mdRow([mv(ob.logProd), mv(ob.logStg), mv(ob.logDev)]) ]);
+      
+      // 8 Performance & Scalability
+      const ps = s.perf_scalability || {};
+      md += `\n\n## 8. Performance & Scalability\n\n`;
+      md += mdTable(['Env','RPS','p95','p99','Error%','SLO'], [
+        mdRow(['Production', mv(ps.env?.prod?.rps), mv(ps.env?.prod?.p95), mv(ps.env?.prod?.p99), mv(ps.env?.prod?.err), mv(ps.env?.prod?.slo)]),
+        mdRow(['Staging', mv(ps.env?.stg?.rps), mv(ps.env?.stg?.p95), mv(ps.env?.stg?.p99), mv(ps.env?.stg?.err), mv(ps.env?.stg?.slo)]),
+        mdRow(['Development', mv(ps.env?.dev?.rps), mv(ps.env?.dev?.p95), mv(ps.env?.dev?.p99), mv(ps.env?.dev?.err), mv(ps.env?.dev?.slo)])
+      ]);
+      
+      // 9 Testing Strategy
+      const ts = s.testing_strategy || {};
+      md += `\n\n## 9. Testing Strategy\n\n`;
+      md += mdTable(['API Tool','Coverage'], [ mdRow([mv(ts.apiTool), mv(ts.apiCoverage)]) ]);
+      
+      // 10 Deployment
+      const dp = s.deployment || {};
+      md += `\n\n## 10. Deployment\n\n`;
+      md += mdTable(['Image','Type','Strategy'], [ mdRow([mv(dp.image), mv(dp.kind), mv(dp.rollout)]) ]);
+      
+      // 11 Compliance
+      const cg = s.compliance_governance || {};
+      md += `\n\n## 11. Compliance & Governance\n\n`;
+      md += mdTable(['Frameworks','Classification'], [ mdRow([mv(Array.isArray(cg.regs)?cg.regs.join(', '):cg.regs), mv(cg.class)]) ]);
+      
+      // 12 Final
+      const fc = s.final_chapter || {};
+      md += `\n\n## 12. Decisions, Open Questions & Review\n\n`;
+      const decs = Array.isArray(fc.decisions)? fc.decisions : [];
+      md += `### Decisions\n\n` + mdTable(['Decision','Rationale','Date','By'], decs.length? decs.map(x=>mdRow([mv(x.desc), mv(x.rat), mv(x.date), mv(x.by)])) : []);
+      const ques = Array.isArray(fc.questions)? fc.questions : [];
+      md += `\n\n### Open Questions\n\n` + mdTable(['Question','To','Due','Pri','Status','Notes'], ques.length? ques.map(x=>mdRow([mv(x.q), mv(x.to), mv(x.date), mv(x.pri), mv(x.status), mv(x.notes)])) : []);
+      const appr = Array.isArray(fc.approvals)? fc.approvals : [];
+      md += `\n\n### Approvals\n\n` + mdTable(['Role','Name','Decision','Date','Comments'], appr.length? appr.map(x=>mdRow([mv(x.role), mv(x.name), mv(x.decision), mv(x.date), mv(x.comments)])) : []);
 
-    const blob = new Blob([md], { type: 'text/markdown' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'microservice_detailed_design.md';
-    a.click();
+      // Generate filename
+      const version = (so.svcVer || 'v1.0.0').trim();
+      const sanitizedName = serviceName.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'microservice';
+      const versionStr = version.startsWith('v') ? version : `v${version}`;
+      const filename = `${sanitizedName}-Detailed-Design-${versionStr}.md`;
+
+      const blob = new Blob([md], { type: 'text/markdown' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(()=>{URL.revokeObjectURL(a.href); a.remove();},0);
+      toast('Exported Markdown');
+    }catch(e){ console.error(e); toast('Export failed'); }
   };
 })();
 /* =========================
@@ -4876,7 +5144,7 @@ function loadMockData(){
 document.addEventListener('DOMContentLoaded', ()=>{
   // ... your existing boot code (load state, buildNav, go(0), etc.)
   const ex = document.getElementById('export-doc');
-  if(ex) ex.onclick = exportWholeDoc;   // <-- add this line
+  if(ex) ex.onclick = exportTrueDocx;   // switch to true DOCX export
   const exMd = document.getElementById('export-md');
   if(exMd) exMd.onclick = exportWholeMarkdown;
 });
